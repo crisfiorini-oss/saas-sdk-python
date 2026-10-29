@@ -313,6 +313,7 @@ async def grpc_endpoint(request, tmp_path):
         # The current host's transport: h2c, with the mesh securing the hop.
         port = server.add_insecure_port("localhost:0")
     await server.start()
+    state["address"] = f"localhost:{port}"
     if request.param == "tls":
         tls = ssl.create_default_context(cadata=cert_bytes.decode())
         client = revision.GRPCClient(f"https://localhost:{port}", token, tls_context=tls)
@@ -346,6 +347,39 @@ async def test_grpc_canonical_wire_credential_refresh_and_current_denial(grpc_en
         assert not {"authorization", "cookie", "x-codefly-work-context"}.intersection(
             metadata
         )
+
+
+@pytest.mark.parametrize("grpc_endpoint", ["mesh"], indirect=True)
+async def test_module_revision_uses_work_organization_and_separate_module_proof(grpc_endpoint):
+    _, state = grpc_endpoint
+
+    class Module:
+        def __init__(self):
+            self.organizations = []
+            self.closed = False
+
+        async def work_context(self, org):
+            self.organizations.append(org)
+            return "own-module-proof"
+
+        async def aclose(self):
+            self.closed = True
+
+    module = Module()
+    client = revision.ModuleMeshGRPCClient(state["address"], module)
+    try:
+        await client.check(claims())
+        state["status"] = grpc.StatusCode.FAILED_PRECONDITION
+        with pytest.raises(revision.RevisionDenied):
+            await client.check(claims())
+        assert module.organizations == [claims().tenant_id] * 2
+        for request, metadata in state["calls"]:
+            assert request == revision.revision_request(claims())
+            assert metadata["x-codefly-work-context"] == "own-module-proof"
+            assert not {"authorization", "cookie", "x-codefly-internal-token"}.intersection(metadata)
+    finally:
+        await client.aclose()
+    assert module.closed
 
 
 @pytest.mark.parametrize(

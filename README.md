@@ -319,6 +319,18 @@ consumption still requires a durable replay store the caller owns.
 
 ## Current authorization revision
 
+For a host that requires the calling module's identity, use
+`ModuleMeshGRPCClient(address, module_client)`. Construct `module_client` with
+`saas_sdk.module_authority.ModuleClient(gateway_origin, prefix, internal_credential,
+workload_credential, mesh_protected=...)`; both credentials are async callbacks
+that read this workload's own current credentials. Install the `module-authority`
+and `revision-grpc` extras. The revision client owns and closes the module client.
+Each check mints a module Work Context for the verified caller's organization and
+sends it in `x-codefly-work-context`; the request body retains the caller's owner
+and actor scopes. No credential or authorization decision is cached, and a failed
+mint prevents the revision call. The older clients below remain for hosts that
+explicitly accept the shared internal credential.
+
 `saas_sdk.authorization_revision` implements Accounts' current revision protocol
 for **already verified** `WorkContext` claims. It projects the owner and every
 actor's original scopes, including resource IDs and revision. The consumer keeps

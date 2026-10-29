@@ -39,6 +39,8 @@ __all__ = [
     "revision_request",
     "ConnectClient",
     "GRPCClient",
+    "MeshGRPCClient",
+    "ModuleMeshGRPCClient",
 ]
 
 try:
@@ -299,13 +301,13 @@ class _GRPCRevision:
         try:
             # One total budget includes credential refresh, connection and RPC body.
             deadline = asyncio.get_running_loop().time() + TIMEOUT
-            token = await _internal_credential(self.credential)
+            metadata = await self._metadata(claims)
             remaining = deadline - asyncio.get_running_loop().time()
             if remaining <= 0:
                 raise TimeoutError
             response = await self.rpc(
                 revision_request(claims),
-                metadata=(("x-codefly-internal-token", token),),
+                metadata=metadata,
                 timeout=remaining,
                 wait_for_ready=False,
             )
@@ -325,6 +327,9 @@ class _GRPCRevision:
 
     async def aclose(self) -> None:
         await self.channel.close()
+
+    async def _metadata(self, claims):
+        return (("x-codefly-internal-token", await _internal_credential(self.credential)),)
 
 
 class GRPCClient(_GRPCRevision):
@@ -379,4 +384,28 @@ class MeshGRPCClient(_GRPCRevision):
             grpc.aio.insecure_channel(_mesh_address(address), options=_CHANNEL_OPTIONS),
             credential,
         )
+
+
+class ModuleMeshGRPCClient(MeshGRPCClient):
+    """Revision checks authenticated as the installed module in the work organization.
+
+    Owns the supplied module client. The revision subjects remain the verified
+    caller's; the header identifies the service asking about those subjects.
+    """
+
+    def __init__(self, address, module_client):
+        super().__init__(address, None)
+        self.module_client = module_client
+
+    async def _metadata(self, claims):
+        async def credential():
+            return await self.module_client.work_context(claims.tenant_id)
+
+        return (("x-codefly-work-context", await _internal_credential(credential)),)
+
+    async def aclose(self):
+        try:
+            await super().aclose()
+        finally:
+            await self.module_client.aclose()
 
