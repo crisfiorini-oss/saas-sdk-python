@@ -73,6 +73,7 @@ class ModuleClient:
         try:
             return await asyncio.wait_for(self._mint(organization), timeout=3)
         except (
+            asyncio.TimeoutError,
             httpx.HTTPError,
             OSError,
             ValueError,
